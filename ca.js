@@ -1,5 +1,5 @@
 class CanvasAPI {
-    constructor(canvasId) {
+    constructor(canvasId, serverEndpoint) {
         this.canvas = document.getElementById(canvasId);
         if (!this.canvas) {
             throw new Error("Canvas element not found");
@@ -8,12 +8,13 @@ class CanvasAPI {
         this.shapes = [];
         this.layers = [];
         this.currentLayer = null;
+        this.serverEndpoint = serverEndpoint; // Server endpoint for saving data
 
         // AutoDraw setup
         this.autoDrawActive = false;
-        this.autoDrawModel = null; // Placeholder for ML model
         this.sketches = [];
-        this.loadAutoDrawModel();
+        this.mlModel = null; // Placeholder for ML model
+        this.loadMLModel();
     }
 
     setDimensions(width, height) {
@@ -134,54 +135,82 @@ class CanvasAPI {
         ctx.putImageData(imageData, 0, 0);
     }
 
-    // AutoDraw Feature
-    loadAutoDrawModel() {
-        // Placeholder: Load a pre-trained machine learning model for sketch recognition
-        console.log("AutoDraw model loaded.");
-        this.autoDrawModel = {}; // Mock object for demonstration
-    }
+    // Image Quality Enhancement
+    enhanceQuality() {
+        const ctx = this.currentLayer || this.context;
+        const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+        const data = imageData.data;
 
-    startSketching() {
-        this.autoDrawActive = true;
-        this.sketches = [];
-        this.canvas.addEventListener("mousedown", this.handleSketch.bind(this));
-    }
+        // Apply sharpening filter
+        const kernel = [
+            0, -1, 0,
+            -1, 5, -1,
+            0, -1, 0,
+        ];
+        const side = Math.sqrt(kernel.length);
+        const halfSide = Math.floor(side / 2);
 
-    stopSketching() {
-        this.autoDrawActive = false;
-        this.canvas.removeEventListener("mousedown", this.handleSketch.bind(this));
-        this.convertSketchToShape();
-    }
+        const src = imageData.data;
+        const srcWidth = imageData.width;
+        const srcHeight = imageData.height;
 
-    handleSketch(event) {
-        const x = event.offsetX;
-        const y = event.offsetY;
-        this.sketches.push({ x, y });
-        const ctx = this.context;
-        ctx.fillStyle = "gray";
-        ctx.beginPath();
-        ctx.arc(x, y, 2, 0, Math.PI * 2);
-        ctx.fill();
-    }
+        const output = new Uint8ClampedArray(src.length);
 
-    convertSketchToShape() {
-        if (!this.autoDrawModel) {
-            console.error("AutoDraw model not loaded.");
-            return;
+        for (let y = 0; y < srcHeight; y++) {
+            for (let x = 0; x < srcWidth; x++) {
+                const dstOffset = (y * srcWidth + x) * 4;
+                let r = 0, g = 0, b = 0;
+
+                for (let ky = 0; ky < side; ky++) {
+                    for (let kx = 0; kx < side; kx++) {
+                        const srcX = Math.min(srcWidth - 1, Math.max(0, x + kx - halfSide));
+                        const srcY = Math.min(srcHeight - 1, Math.max(0, y + ky - halfSide));
+                        const srcOffset = (srcY * srcWidth + srcX) * 4;
+                        const wt = kernel[ky * side + kx];
+
+                        r += src[srcOffset] * wt;
+                        g += src[srcOffset + 1] * wt;
+                        b += src[srcOffset + 2] * wt;
+                    }
+                }
+
+                output[dstOffset] = Math.min(Math.max(r, 0), 255);
+                output[dstOffset + 1] = Math.min(Math.max(g, 0), 255);
+                output[dstOffset + 2] = Math.min(Math.max(b, 0), 255);
+                output[dstOffset + 3] = src[dstOffset + 3]; // Alpha channel
+            }
         }
-        // Placeholder: Use ML model to recognize sketch and convert to shape
-        const recognizedShape = "rectangle"; // Mock recognition result
-        const options = { x: 50, y: 50, width: 100, height: 50, color: "blue" };
-        this.addShape(recognizedShape, options);
+
+        imageData.data.set(output);
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    // Save to Server
+    async saveToServer() {
+        const imageData = this.saveAsImage();
+        try {
+            const response = await fetch(this.serverEndpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ image: imageData })
+            });
+            if (response.ok) {
+                console.log("Image saved successfully to server.");
+            } else {
+                console.error("Failed to save image to server:", response.statusText);
+            }
+        } catch (error) {
+            console.error("Error saving image to server:", error);
+        }
     }
 }
 
 // Example usage
-const canvasAPI = new CanvasAPI("myCanvas");
+const canvasAPI = new CanvasAPI("myCanvas", "https://example.com/save");
 canvasAPI.setDimensions(800, 600);
 canvasAPI.setBackgroundColor("white");
 
-// Start AutoDraw functionality
-canvasAPI.startSketching();
-// Stop AutoDraw after sketching
-setTimeout(() => canvasAPI.stopSketching(), 5000);
+// Draw something on the canvas
+canvasAPI.addShape("rectangle", { x: 50, y: 50, width: 200, height: 100, color: "blue" });
+canvasAPI.enhanceQuality(); // Enhance the quality of the drawn content
+canvasAPI.saveToServer(); // Save the enhanced image to the server
